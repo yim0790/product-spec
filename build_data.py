@@ -466,9 +466,17 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     .grps{grid-template-columns:1fr}
     .guide{font-size:12px;padding:9px 12px}
     .tools{margin-left:0;width:100%}
-    .tw{max-height:65vh}
-    th.k,td.k{min-width:150px;max-width:150px;font-size:14px}
-    th,td{font-size:14px;padding:9px 10px}
+    .tw{max-height:70vh}
+    /* 폰에서는 표 최소폭을 풀어 값이 화면 안에 들어오게 한다.
+       상품이 2개 이상일 때만 모델 열 최소폭 때문에 가로 스크롤이 생긴다. */
+    table{min-width:0}
+    th.k,td.k{min-width:98px;max-width:98px;font-size:13px;padding:8px 7px}
+    thead th.mdl{min-width:145px}
+    th,td{font-size:14px;padding:8px 9px}
+    .th-img{height:74px;margin-top:5px}
+    .th-img img{max-height:66px}
+    .lb img{max-width:94vw;padding:6px}
+    .lb-nav{font-size:28px;padding:4px 12px}
   }
 </style>
 </head>
