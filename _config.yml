@@ -1,0 +1,14 @@
+# GitHub Pages 에 발행하지 않을 파일 목록 (운영 스크립트가 웹에 노출되는 것을 막는다)
+exclude:
+  - config.cmd
+  - README.md
+  - build_data.py
+  - make_shortcut.py
+  - setup_github.bat
+  - update.bat
+  - make_shortcut.bat
+  - update_log.txt
+  - setup_log.txt
+  - .gitignore
+  - 공유용
+  - __pycache__

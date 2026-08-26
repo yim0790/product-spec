@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+update_log.txt
+setup_log.txt
+~$*
+.~lock.*
+*.tmp
+Thumbs.db
+desktop.ini
+config.cmd
