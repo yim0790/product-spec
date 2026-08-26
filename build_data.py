@@ -20,6 +20,17 @@ OUT_HTML = os.path.join(HERE, "index.html")
 MOCK_HTML = os.path.join(SRC_DIR, "mockup.html")
 TITLE = "상품스펙 조회"
 
+# ── 제품 이미지 ──────────────────────────────────────────────────────
+# 원본은 작업폴더의 '상품이미지' 에 두고, 빌드할 때 가로 600px WEBP 로 줄여
+# 저장소의 img\ 로 복사한다. 원본은 건드리지 않는다.
+IMG_SRC  = os.path.join(SRC_DIR, "상품이미지")
+IMG_OUT  = os.path.join(HERE, "img")
+IMG_MAXW = 600
+IMG_EXT  = (".jpg", ".jpeg", ".png", ".webp", ".gif")
+# 파일명 앞에 붙는 브랜드/시리즈 접두어 (매칭할 때 떼어낸다)
+FILE_PREFIX_RE = re.compile(r"^(UN|UCI|HHD|PW|UB|UNL|UNS|UNT)-", re.I)
+MODEL_PREFIX_RE = re.compile(r"^(UN|UCI|HHD|PW|UB)-", re.I)
+
 # ── 모델명 표시 규칙 ─────────────────────────────────────────────────
 # Notion '모델명' 셀에 모델코드와 부가메모(에어샷/라이카/입고완료 등)가 섞여 들어있다.
 # 화면 표시용으로 모델코드를 뽑아 쓰되, 원본 표기는 아래 항목으로 그대로 보존한다.
@@ -59,6 +70,120 @@ def name_map(rows):
             seen[name] = 1
         out.append(name)
     return out
+
+
+def _fcore(fname):
+    """이미지 파일명에서 모델코드만 뽑는다. 'UN-1880S(SILVER).PNG' → '1880S'"""
+    s = os.path.splitext(fname)[0]
+    s = re.split(r"[ (_]", s)[0].upper()      # 색상·별칭 꼬리표 제거
+    s = FILE_PREFIX_RE.sub("", s)
+    return re.sub(r"[^A-Z0-9]", "", s)
+
+
+def _mcore(code):
+    return re.sub(r"[^A-Z0-9]", "", MODEL_PREFIX_RE.sub("", code.upper()))
+
+
+def scan_images():
+    """상품이미지 폴더를 훑어 {모델코드核: [파일명...]} 을 만든다."""
+    if not os.path.isdir(IMG_SRC):
+        return {}
+    out = {}
+    for f in sorted(os.listdir(IMG_SRC)):
+        if not f.lower().endswith(IMG_EXT):
+            continue
+        c = _fcore(f)
+        if len(c) < 3:          # 코드로 볼 수 없는 이름(예: '에어샷 휴대용케이스')은 건너뛴다
+            continue
+        out.setdefault(c, []).append(f)
+    return out
+
+
+def match_images(raw_name, fmap):
+    """모델명에 적힌 코드(여러 개일 수 있다)로 이미지를 찾는다.
+    정확히 일치하는 것을 먼저 쓰고, 없으면 접두가 겹치는 후보가 딱 하나일 때만 쓴다."""
+    codes = re.findall(r"(?:UN|UCI)-[A-Za-z0-9]+", raw_name, re.I) \
+            or [raw_name.split("\n")[0].strip()]
+    cores = [_mcore(c) for c in codes]
+    for c in cores:
+        if c in fmap:
+            return fmap[c], "exact"
+    for c in cores:
+        cand = [k for k in fmap if k.startswith(c) or c.startswith(k)]
+        if len(cand) == 1:
+            return fmap[cand[0]], "prefix"
+    return [], "none"
+
+
+def ensure_pillow():
+    try:
+        from PIL import Image  # noqa: F401
+    except ImportError:
+        print("  Pillow 가 없어 자동 설치합니다...")
+        os.system(f'"{sys.executable}" -m pip install pillow')
+    from PIL import Image  # noqa: F401
+    return Image
+
+
+def make_thumb(Image, src, dst):
+    """가로 IMG_MAXW 로 줄여 WEBP 로 저장. 투명배경은 그대로 살린다.
+    원본이 더 최신일 때만 다시 만든다."""
+    if os.path.exists(dst) and os.path.getmtime(dst) >= os.path.getmtime(src):
+        return False
+    im = Image.open(src)
+    if im.mode in ("P", "LA"):
+        im = im.convert("RGBA")
+    elif im.mode not in ("RGB", "RGBA"):
+        im = im.convert("RGB")
+    if im.width > IMG_MAXW:
+        im = im.resize((IMG_MAXW, round(im.height * IMG_MAXW / im.width)), Image.LANCZOS)
+    im.save(dst, "WEBP", quality=82, method=4)
+    return True
+
+
+def build_images(data):
+    """행마다 이미지를 찾아 썸네일을 만들고 rows[i]['_img'] 에 경로를 넣는다."""
+    fmap = scan_images()
+    if not fmap:
+        print(f"  (상품이미지 폴더가 없어 이미지 없이 만듭니다: {IMG_SRC})")
+        for d in data.values():
+            for r in d["rows"]:
+                r["_img"] = []
+        return {"found": 0, "total": 0, "made": 0, "prefix": [], "missing": []}
+
+    Image = ensure_pillow()
+    os.makedirs(IMG_OUT, exist_ok=True)
+    stat = {"found": 0, "total": 0, "made": 0, "prefix": [], "missing": []}
+    keep = set()
+
+    for d in data.values():
+        for r in d["rows"]:
+            stat["total"] += 1
+            files, how = match_images(r[RAW].replace(" / ", "\n"), fmap)
+            paths = []
+            for f in files:
+                name = re.sub(r"[^A-Za-z0-9._-]", "_", os.path.splitext(f)[0]) + ".webp"
+                dst = os.path.join(IMG_OUT, name)
+                try:
+                    if make_thumb(Image, os.path.join(IMG_SRC, f), dst):
+                        stat["made"] += 1
+                    paths.append("img/" + name)
+                    keep.add(name)
+                except Exception as e:
+                    print(f"  [이미지 실패] {f}: {e}")
+            r["_img"] = paths
+            if paths:
+                stat["found"] += 1
+                if how == "prefix":
+                    stat["prefix"].append(f"{r['모델명']} ← {files[0]}")
+            else:
+                stat["missing"].append(r["모델명"])
+
+    # 더 이상 쓰지 않는 썸네일은 저장소에서 지운다
+    for f in os.listdir(IMG_OUT):
+        if f.endswith(".webp") and f not in keep:
+            os.remove(os.path.join(IMG_OUT, f))
+    return stat
 
 
 # ── 대유형 정의 ───────────────────────────────────────────────────────
@@ -139,6 +264,7 @@ def load():
         have = set()
         for r in rows:
             have |= set(r.keys())
+        have.discard("_img")
         groups, used = [], set()
         for gname, items in GROUPS[k]:
             keep = [i for i in items if i in have]
@@ -162,6 +288,7 @@ def verify(data):
         for r in d["rows"]:
             keys |= set(r.keys())
         keys.discard("모델명")
+        keys.discard("_img")
         listed = {i for g in d["groups"] for i in g["items"]}
         miss = keys - listed
         blank = sorted(i for i in listed
@@ -305,6 +432,25 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   tr.same td{background:var(--diff)}
   tr.same td.k{background:#fdf3dd;box-shadow:inset 4px 0 0 var(--diffline), inset -1px 0 0 var(--line)}
   td.na{color:#c3bdb3}
+  /* 헤더 안 제품 사진 */
+  .th-img{position:relative;margin-top:6px;background:#fff;border:1px solid var(--line);
+          border-radius:7px;padding:4px;height:96px;display:flex;align-items:center;justify-content:center}
+  .th-img img{max-width:100%;max-height:88px;object-fit:contain;cursor:zoom-in;display:block}
+  .th-img em{position:absolute;right:4px;bottom:4px;background:rgba(0,0,0,.55);color:#fff;
+             font-style:normal;font-size:11px;padding:1px 5px;border-radius:9px}
+  .th-img.none{color:#c3bdb3;font-size:12px;font-weight:400;background:#faf8f4}
+  /* 사진 크게 보기 */
+  .lb{display:none;position:fixed;inset:0;z-index:80;background:rgba(20,18,15,.88);
+      align-items:center;justify-content:center}
+  .lb.open{display:flex}
+  .lb img{max-width:86vw;max-height:82vh;object-fit:contain;background:#fff;border-radius:10px;padding:10px}
+  .lb-x{position:absolute;top:14px;right:18px;font-size:24px;line-height:1}
+  .lb-nav{position:absolute;top:50%;transform:translateY(-50%);font-size:34px;line-height:1;padding:6px 16px}
+  .lb-nav.prev{left:14px} .lb-nav.next{right:14px}
+  .lb-x,.lb-nav{background:rgba(255,255,255,.14);color:#fff;border:none;border-radius:9px;
+                cursor:pointer;font-family:inherit}
+  .lb-x:hover,.lb-nav:hover{background:rgba(255,255,255,.28)}
+  .lb-cap{position:absolute;bottom:18px;left:0;right:0;text-align:center;color:#fff;font-size:15px}
   tbody tr:last-child td{border-bottom:none}
   .msg{padding:44px 16px;text-align:center;color:var(--mut);font-size:17px;line-height:1.8}
   #off{display:none;background:#fdf3dd;border:1px solid var(--diffline);color:#7a5c14;
@@ -344,6 +490,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       <p>모델명 <b>부분일치</b> 검색 &middot; 최소 1개 ~ 최대 <b>5개</b> 비교</p>
       <p><i class="sw"></i>노란 줄 = 값이 <b>모두 같은</b> 항목 &nbsp;/&nbsp; 흰 줄 = 값이 <b>다른</b> 항목</p>
       <p><b>[차이나는 항목만 보기]</b> = 노란 줄을 숨겨 차이만 봅니다 &middot; 값이 없으면 <b>—</b></p>
+      <p><b>[사진 보기]</b> = 모델명 아래 제품 사진 &middot; 사진을 누르면 크게 열립니다</p>
       <p class="ps"><b>프리셋</b> — 자주 보는 스펙 항목 조합을 저장해 두고 꺼내 쓰는 기능입니다.<br>
         ① 항목을 체크한 뒤 <b>[현재 조합 저장]</b> → 이름 입력 (예: 기본세트)<br>
         ② 다음부터는 <b>[프리셋 불러오기]</b>에서 이름만 고르면 그 조합으로 바뀝니다<br>
@@ -380,11 +527,20 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   <div class="rbar">
     <span class="n">비교표 <em id="rn">0</em>개 상품</span>
     <div class="tools">
+      <button class="mini on" id="bImg">사진 보기</button>
       <button class="mini" id="bDiff">차이나는 항목만 보기</button>
       <button class="mini" id="bCsv">CSV 내보내기</button>
     </div>
   </div>
   <div class="tw" id="out"></div>
+
+  <div class="lb" id="lb">
+    <button class="lb-x" id="lbX" title="닫기">✕</button>
+    <button class="lb-nav prev" id="lbP" title="이전">‹</button>
+    <img id="lbImg" alt="">
+    <button class="lb-nav next" id="lbN" title="다음">›</button>
+    <div class="lb-cap" id="lbCap"></div>
+  </div>
 
 </div>
 
@@ -399,6 +555,7 @@ let cat   = 'dryer';
 let picks = [];                 // 선택 모델명
 let cols  = {};                 // 대유형별 체크된 항목 Set
 let diffOnly = false;
+let showImg  = true;
 let sugIdx = -1;
 
 const esc  = s => String(s==null?'':s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
@@ -535,6 +692,7 @@ function visibleRows(){
 function render(){
   document.getElementById('rn').textContent = picks.length;
   document.getElementById('bDiff').classList.toggle('on', diffOnly);
+  document.getElementById('bImg').classList.toggle('on', showImg);
   const box = document.getElementById('out');
 
   if (!picks.length){
@@ -555,8 +713,20 @@ function render(){
   }
   const rows = picks.map(rowOf);
   const span = picks.length + 1;
+  const anyImg = rows.some(r => (r._img || []).length);
   let h = `<table><thead><tr><th class="k">스펙 항목</th>` +
-          picks.map(m => `<th class="mdl">${esc(m)}</th>`).join('') + `</tr></thead><tbody>`;
+          picks.map((m, i) => {
+            const im = rows[i]._img || [];
+            let thumb = '';
+            if (showImg && anyImg){
+              thumb = im.length
+                ? `<div class="th-img"><img src="${im[0]}" alt="${esc(m)}" loading="lazy"` +
+                  ` data-i="${i}" data-n="0">` +
+                  (im.length > 1 ? `<em>+${im.length - 1}</em>` : '') + `</div>`
+                : `<div class="th-img none">사진 없음</div>`;
+            }
+            return `<th class="mdl">${esc(m)}${thumb}</th>`;
+          }).join('') + `</tr></thead><tbody>`;
   groups.forEach(g => {
     h += `<tr class="gh"><td class="k">${esc(g.g)}</td>` +
          `<td colspan="${span-1}"></td></tr>`;
@@ -569,7 +739,30 @@ function render(){
   });
   h += `</tbody></table>`;
   box.innerHTML = h;
+  box.querySelectorAll('.th-img img').forEach(im =>
+    im.onclick = () => openLightbox(+im.dataset.i, +im.dataset.n));
 }
+
+/* ── 사진 크게 보기 ──────────────────────────────────────── */
+let lbList = [], lbIdx = 0;
+function openLightbox(i, n){
+  const r = rowOf(picks[i]);
+  lbList = (r._img || []).map(src => ({src, name: picks[i]}));
+  if (!lbList.length) return;
+  lbIdx = n;
+  drawLightbox();
+  document.getElementById('lb').classList.add('open');
+}
+function drawLightbox(){
+  const it = lbList[lbIdx];
+  document.getElementById('lbImg').src = it.src;
+  document.getElementById('lbCap').textContent =
+    it.name + (lbList.length > 1 ? `  (${lbIdx + 1}/${lbList.length})` : '');
+  document.querySelectorAll('.lb-nav').forEach(b =>
+    b.style.display = lbList.length > 1 ? 'block' : 'none');
+}
+function lbMove(d){ lbIdx = (lbIdx + d + lbList.length) % lbList.length; drawLightbox(); }
+function closeLightbox(){ document.getElementById('lb').classList.remove('open'); }
 
 /* ── CSV ─────────────────────────────────────────────────── */
 function csv(){
@@ -603,6 +796,17 @@ document.getElementById('bAll').onclick  = () => setAll('all');
 document.getElementById('bNone').onclick = () => setAll('none');
 document.getElementById('bDef').onclick  = () => setAll('def');
 document.getElementById('bDiff').onclick = () => { diffOnly = !diffOnly; render(); };
+document.getElementById('bImg').onclick  = () => { showImg = !showImg; render(); };
+document.getElementById('lbX').onclick = closeLightbox;
+document.getElementById('lbP').onclick = () => lbMove(-1);
+document.getElementById('lbN').onclick = () => lbMove(1);
+document.getElementById('lb').onclick  = e => { if (e.target.id === 'lb') closeLightbox(); };
+document.addEventListener('keydown', e => {
+  if (!document.getElementById('lb').classList.contains('open')) return;
+  if (e.key === 'Escape') closeLightbox();
+  if (e.key === 'ArrowLeft')  lbMove(-1);
+  if (e.key === 'ArrowRight') lbMove(1);
+});
 document.getElementById('bCsv').onclick  = csv;
 document.getElementById('bSave').onclick = () => {
   if (!cols[cat].size){ alert('선택된 항목이 없습니다.'); return; }
@@ -651,10 +855,22 @@ def main():
         if not os.path.exists(p):
             raise SystemExit(f"[중단] 원본 JSON 이 없습니다: {p}")
 
-    print("[1/3] 원본 읽기")
+    print("[1/4] 원본 읽기")
     data = load()
 
-    print("[2/3] 검산")
+    print("[2/4] 제품 이미지")
+    st = build_images(data)
+    if st["total"]:
+        print(f"  {st['total']}건 중 이미지 있음 {st['found']}건 "
+              f"({st['found'] / st['total'] * 100:.0f}%) / 새로 만든 썸네일 {st['made']}장")
+        if st["prefix"]:
+            print(f"  [확인] 이름이 완전히 같지 않아 추정 매칭한 {len(st['prefix'])}건:")
+            for x in st["prefix"]:
+                print("        ", x)
+        if st["missing"]:
+            print(f"  [알림] 사진이 없는 {len(st['missing'])}건: {', '.join(st['missing'])}")
+
+    print("[3/4] 검산")
     verify(data)
 
     built = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -662,7 +878,7 @@ def main():
     out = MOCK_HTML if mock else OUT_HTML
     with open(out, "w", encoding="utf-8") as f:
         f.write(html)
-    print(f"[3/3] 생성 완료: {os.path.basename(out)} ({len(html.encode('utf-8')):,} bytes)")
+    print(f"[4/4] 생성 완료: {os.path.basename(out)} ({len(html.encode('utf-8')):,} bytes)")
     if not mock:
         print("완료. 이어서 GitHub 에 업로드합니다.")
 

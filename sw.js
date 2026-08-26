@@ -32,5 +32,16 @@ self.addEventListener('fetch', e => {
     );
     return;
   }
+  // 제품 사진은 파일명이 곧 버전이므로, 한 번 받으면 캐시에 담아 두고 다음부터는 바로 쓴다
+  if (url.pathname.includes('/img/')) {
+    e.respondWith(
+      caches.match(e.request).then(hit => hit || fetch(e.request).then(res => {
+        const copy = res.clone();
+        caches.open(CACHE).then(c => c.put(e.request, copy));
+        return res;
+      }))
+    );
+    return;
+  }
   e.respondWith(caches.match(e.request).then(hit => hit || fetch(e.request)));
 });
