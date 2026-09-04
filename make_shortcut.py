@@ -10,6 +10,9 @@ import os, re, subprocess
 MY_SHORTCUT_NAME    = "상품스펙 업데이트"   # 내 PC 바탕화면 (update.bat 실행)
 STAFF_SHORTCUT_NAME = "상품스펙 조회"       # 나눠줄 웹 바로가기
 
+# 바탕화면 바로가기에 쓸 아이콘 파일(.ico). 없으면 icons\icon-512.png 를 변환해서 쓴다.
+ICON_FILE = r"C:\Users\UNIX117\♥Claude\90)정보\update icon(html).ico"
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -49,7 +52,13 @@ def make_lnk(name, target, workdir, icon):
 
 
 def make_ico():
-    """PNG 아이콘을 .ico 로 바꿔 바로가기에 쓴다. Pillow 가 없으면 윈도우 기본 아이콘을 쓴다."""
+    """지정한 .ico 를 우선 쓰고, 없으면 PNG 아이콘을 변환해서 쓴다."""
+    if ICON_FILE and os.path.exists(ICON_FILE):
+        print("      아이콘:", ICON_FILE)
+        return ICON_FILE
+    if ICON_FILE:
+        print(f"      (지정한 아이콘을 찾지 못했습니다: {ICON_FILE})")
+
     src = os.path.join(HERE, "icons", "icon-512.png")
     dst = os.path.join(HERE, "icons", "app.ico")
     if os.path.exists(dst):
@@ -75,10 +84,9 @@ def main():
     print("바로가기 만들기")
     print("=" * 60)
 
-    icon = make_ico()
-
     # 1) 내 PC: 업데이트 버튼
     print(f"[1/2] 내 바탕화면 바로가기 '{MY_SHORTCUT_NAME}'")
+    icon = make_ico()
     p = make_lnk(MY_SHORTCUT_NAME, os.path.join(HERE, "update.bat"), HERE, icon)
     if p:
         print("      생성:", p)
