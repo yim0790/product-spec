@@ -11,7 +11,7 @@ MY_SHORTCUT_NAME    = "상품스펙 업데이트"   # 내 PC 바탕화면 (updat
 STAFF_SHORTCUT_NAME = "상품스펙 조회"       # 나눠줄 웹 바로가기
 
 # 바탕화면 바로가기에 쓸 아이콘 파일(.ico). 없으면 icons\icon-512.png 를 변환해서 쓴다.
-ICON_FILE = r"C:\Users\UNIX117\♥Claude\90)정보\update icon(html).ico"
+ICON_FILE = r"C:\Users\UNIX117\ClaudeYim\90)정보\update icon(html).ico"
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
